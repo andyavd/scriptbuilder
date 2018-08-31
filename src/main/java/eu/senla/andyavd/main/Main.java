@@ -18,6 +18,8 @@ import java.util.List;
 
 public class Main {
 
+    private static final String BRACKET_LEFT = "(";
+    private static final String BRACKET_RIGHT = ")";
     private static final String LOAD_ACCOUNTS_SH = "./load_accounts.sh ";
     private static final String NEW_LINE_SYMBOL = "\n";
     private static final String XLSX_FILE_PATH = "test.xlsx";
@@ -25,9 +27,6 @@ public class Main {
     private static int dateRowNumber;
 
     public static void main(String[] args) throws IOException, InvalidFormatException {
-
-	// RowIndex for Account ids = 5
-	// RowIndex for ReportType = 10
 
 	Workbook workbook = WorkbookFactory.create(new File(XLSX_FILE_PATH));
 	Sheet sheet = workbook.getSheetAt(0);
@@ -39,18 +38,26 @@ public class Main {
 	// System.out.println("daterownumber is " + dateRowNumber);
 	removeRowsBeforeCurrentDate(sheet);
 
-	List<String> accountsIdsForMerchantData = new ArrayList<String>();
-	List<String> accountsIdsForSubid = new ArrayList<String>();
+	List<String> accountsIdsForMerchantDataProd = new ArrayList<String>();
+	List<String> accountsIdsForMerchantDataStage = new ArrayList<String>();
+	List<String> accountsIdsForSubidProd = new ArrayList<String>();
+	List<String> accountsIdsForSubidStage = new ArrayList<String>();
 
-	fillInAccountIdsList(sheet, dataFormatter, ReportTypes.MerchantData.name(), accountsIdsForMerchantData);
-	fillInAccountIdsList(sheet, dataFormatter, ReportTypes.Subid.name(), accountsIdsForSubid);
+	fillInAccountIdsList(sheet, dataFormatter, ReportTypes.MerchantData.name(), accountsIdsForMerchantDataProd,
+		ServerTypes.PROD);
+	fillInAccountIdsList(sheet, dataFormatter, ReportTypes.MerchantData.name(), accountsIdsForMerchantDataStage,
+		ServerTypes.STAGE);
+	fillInAccountIdsList(sheet, dataFormatter, ReportTypes.Subid.name(), accountsIdsForSubidProd, ServerTypes.PROD);
+	fillInAccountIdsList(sheet, dataFormatter, ReportTypes.Subid.name(), accountsIdsForSubidStage,
+		ServerTypes.STAGE);
 
-	printShScript(accountsIdsForMerchantData, currentDate, sdf, true);
-	printShScript(accountsIdsForSubid, currentDate, sdf, false);
-
-	// Closing the workbook
+	printShScript(accountsIdsForMerchantDataProd, currentDate, sdf, true, ServerTypes.PROD);
+	printShScript(accountsIdsForMerchantDataStage, currentDate, sdf, true, ServerTypes.STAGE);
+	printShScript(accountsIdsForSubidProd, currentDate, sdf, false, ServerTypes.PROD);
+	printShScript(accountsIdsForSubidStage, currentDate, sdf, false, ServerTypes.STAGE);
+	printMigrateScript(accountsIdsForMerchantDataProd, ServerTypes.PROD);
+	printMigrateScript(accountsIdsForMerchantDataStage, ServerTypes.STAGE);
 	workbook.close();
-
     }
 
     private static void getDateContainingRowNum(Sheet sheet, Date currentDate, SimpleDateFormat sdf,
@@ -75,19 +82,49 @@ public class Main {
     }
 
     private static void fillInAccountIdsList(Sheet sheet, DataFormatter dataFormatter, String reportType,
-	    List<String> accountsIdsList) {
+	    List<String> accountsIdsList, ServerTypes type) {
 	sheet.forEach(row -> {
 	    Cell reportTypeCell = row.getCell(10);
 	    Cell accountIdCell = row.getCell(5);
 	    String reportTypeCellValue = dataFormatter.formatCellValue(reportTypeCell);
 	    String accountIdCellValue = dataFormatter.formatCellValue(accountIdCell);
 	    if (reportTypeCellValue.equals(reportType)) {
-		if (accountIdCellValue.contains(NEW_LINE_SYMBOL)) {
-		    accountIdCellValue = accountIdCellValue.replace(NEW_LINE_SYMBOL, SPACE);
+		if (!accountIdCellValue.contains(NEW_LINE_SYMBOL)) {
+		    if (accountIdCellValue.contains(BRACKET_LEFT)) {
+			accountIdCellValue = filterString(accountIdCellValue, type);
+		    }
+		    accountsIdsList.add(accountIdCellValue);
+		} else {
+		    accountsIdsList.addAll(removeNewLines(accountIdCellValue, type));
 		}
-		accountsIdsList.add(accountIdCellValue);
 	    }
 	});
+    }
+
+    private static List<String> removeNewLines(String cellValue, ServerTypes type) {
+	String[] cellValuesArray = cellValue.split(NEW_LINE_SYMBOL);
+	List<String> tempList = new ArrayList<String>();
+	for (String value : cellValuesArray) {
+	    if (value.contains(BRACKET_LEFT)) {
+		value = filterString(value, type);
+	    }
+	    tempList.add(value);
+	}
+	return tempList;
+    }
+
+    private static String filterString(String celValue, ServerTypes type) {
+	int index_left = celValue.indexOf(BRACKET_LEFT);
+	int index_right = celValue.indexOf(BRACKET_RIGHT);
+
+	switch (type) {
+	case PROD:
+	    celValue = celValue.substring(0, index_left - 1);
+	    break;
+	case STAGE:
+	    celValue = celValue.substring(index_left + 1, index_right);
+	}
+	return celValue;
     }
 
     private static String getDateForScript(Date currentDate, SimpleDateFormat sdf) {
@@ -101,13 +138,23 @@ public class Main {
     }
 
     private static void printShScript(List<String> accountsIdsList, Date currentDate, SimpleDateFormat sdf,
-	    boolean isMerchantData) {
+	    boolean isMerchantData, ServerTypes type) {
 	String reportType = (isMerchantData) ? ReportTypes.MerchantData.name() : ReportTypes.Subid.name();
 	String idsAsSpaceSeparatedString = String.join(SPACE, accountsIdsList);
 	idsAsSpaceSeparatedString.trim();
 
-	System.out.println(new StringBuilder("Script for ").append(reportType).append(":"));
+	System.out.println(new StringBuilder("Script for ").append(reportType).append(" on ").append(type).append(":"));
 	System.out.println(new StringBuilder(LOAD_ACCOUNTS_SH).append(reportType).append(SPACE)
 		.append(getDateForScript(currentDate, sdf)).append(SPACE).append(idsAsSpaceSeparatedString));
+    }
+
+    private static void printMigrateScript(List<String> accountsIdsList, ServerTypes type) {
+	String idsAsSpaceSeparatedString = String.join(",", accountsIdsList);
+	System.out.println(new StringBuilder("Migration script for ").append(ReportTypes.MerchantData).append(" on ").append(type)
+		.append(":"));
+	System.out.println("{");
+	System.out.println(new StringBuilder("    \"reportType\":\"").append(ReportTypes.MerchantData).append("\","));
+	System.out.println(new StringBuilder("    \"accID\":\"").append(idsAsSpaceSeparatedString).append("\""));
+	System.out.println("}");
     }
 }
